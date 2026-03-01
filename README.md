@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Audio to Notes Web App
 
-## Getting Started
+This Next.js web application provides an aesthetic interface for users to upload audio files, convert them into text using the Gemini 2.5 Flash API, and elegantly represent the output as organized notes.
 
-First, run the development server:
+## Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Audio File Upload**: Supports MP3, WAV, M4A, OGG, and other common audio formats.
+- **Gemini 2.5 Flash Integration**: Leverages Google's advanced AI to accurately transcribe audio and generate structured notes.
+- **Minimalist Dark Theme**: Features a sleek, glassmorphic UI with responsive design.
+- **Serverless Architecture**: Built with Next.js App Router and server actions for secure API key management.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Prerequisites
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Before you begin, ensure you have the following installed:
+- [Node.js](https://nodejs.org/) (v18 or newer)
+- npm, yarn, or pnpm
+- A Gemini API Key from Google AI Studio.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Installation
 
-## Learn More
+1. **Clone the repository:**
+   ```bash
+   git clone <your-repo-url>
+   cd audio-transcription
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+2. **Install dependencies:**
+   ```bash
+   npm install
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+3. **Set up environment variables:**
+   Create a `.env.local` file in the root directory and add your Gemini API Key:
+   ```env
+   GEMINI_API_KEY=your_gemini_api_key_here
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Usage
 
-## Deploy on Vercel
+1. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+2. **Open the application:**
+   Navigate to `http://localhost:3000` in your web browser.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+3. **Upload an audio file:**
+   Drag and drop an audio file onto the upload area or click to browse. The application will process the audio, transcribe it, and display the generated notes.
+
+## Built With
+
+- [Next.js](https://nextjs.org/)
+- [React](https://reactjs.org/)
+- [Google Gen AI SDK](https://www.npmjs.com/package/@google/genai)
+- [React Markdown](https://github.com/remarkjs/react-markdown)
+- [Lucide React](https://lucide.dev/icons/)
+- Vanilla CSS
