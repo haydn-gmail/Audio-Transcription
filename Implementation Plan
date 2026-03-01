@@ -1,0 +1,37 @@
+Audio to Notes Web App
+This Next.js web application provides an aesthetic interface for users to upload audio files, convert them into text using the Gemini 2.5 Flash API, and elegantly represent the output as organized notes.
+
+User Review Required
+Framework: We plan to use Next.js (App Router) combined with pure Vanilla CSS, ensuring a high-performance, single-project full-stack application. Is Next.js acceptable to you?
+Aesthetic: We'll implement a minimalist, premium glassmorphic dark mode design, utilizing modern web fonts (e.g. Inter). No Tailwind CSS will be used according to system rules unless overridden.
+Environment Route: The Gemini API Key must be supplied in a .env.local file GEMINI_API_KEY=YOUR_KEY since API requests will be securely routed through Next.js server actions / API endpoints to avoid exposing it to the frontend.
+Proposed Changes
+Setup Workspace
+Directory: /Volumes/T7_Archive/MyProjects-MacOS/Audio-Transcription
+Initialize Next.js without Tailwind: npx -y create-next-app@latest ./ --typescript --eslint --app --src-dir --use-npm --no-tailwind
+Install dependencies: npm install @google/genai react-markdown lucide-react
+Backend Generation (API)
+[NEW] src/app/api/transcribe/route.ts
+Accepts a FormData payload containing the audio file.
+Converts it to a temporary file.
+Uploads the audio file using the Gemini API googleGenai.files.upload.
+Calls models.generateContent on gemini-2.5-flash with the audio and a prompt customized for audio summarization and note-taking.
+Deletes the remote file after returning the response, returning a markdown string to the client.
+Frontend UI & Aesthetics
+[MODIFY] src/app/globals.css
+Setup core CSS variables for a dark luxury aesthetic (deep dark backgrounds, subtle neon gradients, glassmorphic panels).
+[MODIFY] src/app/page.tsx
+Replace the default template with our single-page application structure.
+Implement a drag-and-drop file upload area.
+Display loading animations while the model is processing.
+Render the returned Markdown using react-markdown with refined typography.
+[NEW] src/components/Uploader.tsx (or similar)
+Modularized components for cleaner architecture.
+Verification Plan
+Automated Tests
+N/A for this initial iteration, we will rely on manual testing via browser.
+Manual Verification
+npm run dev to start the local Next.js server.
+Open localhost:3000 in the browser tool.
+Validate the premium dark-mode, glassmorphic design and animations.
+Provide a sample audio file and verify that it correctly uploads and returns well-formatted notes from Gemini.
