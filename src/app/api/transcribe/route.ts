@@ -13,6 +13,7 @@ export async function POST(req: NextRequest) {
     try {
         const formData = await req.formData();
         const audioFile = formData.get("audio") as File;
+        const targetLanguage = (formData.get("language") as string) || "English";
 
         if (!audioFile) {
             return NextResponse.json({ error: "No audio file provided" }, { status: 400 });
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
                 }
             });
 
-            console.log("File uploaded successfully:", uploadedFile.name);
+            console.log(`File uploaded successfully: ${uploadedFile.name}, requesting summary in ${targetLanguage}.`);
 
             // 3. Transcribe and Generate Notes
             const prompt = `You are an expert transcriber and note-taker. 
@@ -58,6 +59,7 @@ export async function POST(req: NextRequest) {
       1. A brief summary of what the audio is about.
       2. The full transcript (if it's short) or key points/takeaways (if it's long).
       3. Action items or next steps if mentioned.
+      IMPORTANT: Your entire response MUST be written fluently in ${targetLanguage}.
       Format your response beautifully in Markdown.`;
 
             const response = await ai.models.generateContent({
@@ -82,8 +84,10 @@ export async function POST(req: NextRequest) {
 
             // 4. Clean up the remote file on Gemini
             try {
-                console.log("Cleaning up remote file...");
-                await ai.files.delete({ name: uploadedFile.name });
+                if (uploadedFile.name) {
+                    console.log("Cleaning up remote file...");
+                    await ai.files.delete({ name: uploadedFile.name });
+                }
             } catch (cleanupError) {
                 console.error("Warning: Failed to delete remote Gemini file:", cleanupError);
             }

@@ -11,6 +11,7 @@ export default function Uploader() {
     const [isUploading, setIsUploading] = useState(false);
     const [result, setResult] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [language, setLanguage] = useState<string>("English");
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -55,6 +56,7 @@ export default function Uploader() {
 
         const formData = new FormData();
         formData.append("audio", file);
+        formData.append("language", language);
 
         try {
             const response = await fetch("/api/transcribe", {
@@ -139,6 +141,26 @@ export default function Uploader() {
                             "Generate Notes"
                         )}
                     </button>
+
+                    <div className={styles.languageWrapper}>
+                        <label htmlFor="language-select">Summary Language:</label>
+                        <select
+                            id="language-select"
+                            className={`${styles.languageSelect} glass-panel`}
+                            value={language}
+                            onChange={(e) => setLanguage(e.target.value)}
+                            disabled={isUploading}
+                        >
+                            <option value="English">English</option>
+                            <option value="Chinese (Simplified)">中文 (简体)</option>
+                            <option value="Chinese (Traditional)">中文 (繁體)</option>
+                            <option value="Spanish">Español</option>
+                            <option value="French">Français</option>
+                            <option value="Japanese">日本語</option>
+                            <option value="Korean">한국어</option>
+                            <option value="German">Deutsch</option>
+                        </select>
+                    </div>
                 </div>
             ) : (
                 <div className={styles.resultSection}>
