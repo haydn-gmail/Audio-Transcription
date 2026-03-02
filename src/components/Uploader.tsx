@@ -9,9 +9,11 @@ export default function Uploader() {
     const [file, setFile] = useState<File | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [transcript, setTranscript] = useState<string | null>(null);
     const [result, setResult] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [language, setLanguage] = useState<string>("English");
+    const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +55,8 @@ export default function Uploader() {
         setIsUploading(true);
         setError(null);
         setResult(null);
+        setTranscript(null);
+        setActiveTab("summary");
 
         const formData = new FormData();
         formData.append("audio", file);
@@ -69,6 +73,7 @@ export default function Uploader() {
             }
 
             const data = await response.json();
+            setTranscript(data.transcript);
             setResult(data.notes);
         } catch (err: any) {
             setError(err.message || "An error occurred during transcription.");
@@ -79,8 +84,10 @@ export default function Uploader() {
 
     const resetUploader = () => {
         setFile(null);
+        setTranscript(null);
         setResult(null);
         setError(null);
+        setActiveTab("summary");
     };
 
     return (
@@ -172,9 +179,24 @@ export default function Uploader() {
                         </button>
                     </div>
 
+                    <div className={styles.tabBar}>
+                        <button
+                            className={`${styles.tabBtn} ${activeTab === "summary" ? styles.tabActive : ""}`}
+                            onClick={() => setActiveTab("summary")}
+                        >
+                            Summary Notes
+                        </button>
+                        <button
+                            className={`${styles.tabBtn} ${activeTab === "transcript" ? styles.tabActive : ""}`}
+                            onClick={() => setActiveTab("transcript")}
+                        >
+                            Full Transcript
+                        </button>
+                    </div>
+
                     <div className={`${styles.notesContainer} ${styles.markdown} glass-panel`}>
                         <ReactMarkdown>
-                            {result}
+                            {activeTab === "summary" ? result : transcript}
                         </ReactMarkdown>
                     </div>
                 </div>

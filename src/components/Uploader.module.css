@@ -214,6 +214,39 @@
     animation: slideUp 0.5s ease;
 }
 
+.tabBar {
+    display: flex;
+    gap: 4px;
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 16px;
+    padding: 4px;
+    border: 1px solid var(--glass-border);
+}
+
+.tabBtn {
+    flex: 1;
+    padding: 12px 24px;
+    border-radius: 12px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+
+.tabBtn:hover:not(.tabActive) {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.tabActive {
+    background: var(--accent-gradient);
+    color: white;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
 .successHeader {
     display: flex;
     flex-direction: column;

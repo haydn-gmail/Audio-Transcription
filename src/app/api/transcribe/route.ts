@@ -4,8 +4,11 @@ import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-// Initialize the Google Gen AI client
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Initialize the Google Gen AI client with a generous timeout for large audio files
+const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: { timeout: 600_000 }, // 10 minutes
+});
 
 export async function POST(req: NextRequest) {
     let tempFilePath: string | null = null;
@@ -64,34 +67,106 @@ export async function POST(req: NextRequest) {
 
             console.log(`File uploaded successfully: ${uploadedFile.name}, requesting summary in ${targetLanguage}.`);
 
-            // 3. Transcribe and Generate Notes
-            const prompt = `You are an expert transcriber and note-taker. 
-      Please listen to this audio and provide:
-      1. A brief summary of what the audio is about.
-      2. The full transcript (if it's short) or key points/takeaways (if it's long).
-      3. Action items or next steps if mentioned.
-      IMPORTANT: Your entire response MUST be written fluently in ${targetLanguage}.
-      Format your response beautifully in Markdown.`;
-
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: [
-                    {
-                        role: "user",
-                        parts: [
-                            {
-                                fileData: {
-                                    fileUri: uploadedFile.uri,
-                                    mimeType: uploadedFile.mimeType,
-                                }
-                            },
-                            { text: prompt }
-                        ]
+            // ── Helper: call model with retry + exponential backoff ──
+            async function callWithRetry(
+                model: string,
+                contents: any[],
+                maxRetries = 3,
+                initialDelayMs = 2000
+            ) {
+                for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        return await ai.models.generateContent({ model, contents });
+                    } catch (err: any) {
+                        const status = err?.status ?? err?.code;
+                        const errMsg = err?.message ?? '';
+                        const isRetryable =
+                            status === 503 ||
+                            status === 429 ||
+                            errMsg.includes('fetch failed') ||
+                            errMsg.includes('UND_ERR_HEADERS_TIMEOUT') ||
+                            errMsg.includes('ECONNRESET');
+                        if (isRetryable && attempt < maxRetries) {
+                            const delay = initialDelayMs * Math.pow(2, attempt - 1);
+                            console.warn(`Model ${model} returned ${status}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
+                            await new Promise(r => setTimeout(r, delay));
+                        } else {
+                            throw err;
+                        }
                     }
-                ]
-            });
+                }
+            }
 
-            const notes = response.text;
+            // ── Step 1: Raw Transcription ──
+            const transcriptionPrompt = `You are a professional audio transcriber. Your ONLY job is to produce an accurate, verbatim transcript of this audio.
+Rules:
+- Transcribe every word exactly as spoken.
+- If there are multiple speakers, label them (e.g., Speaker A, Speaker B).
+- Do NOT summarize, paraphrase, or add commentary.
+- Do NOT generate any text that was not spoken in the audio.
+- If a section is inaudible, write [inaudible].
+- Output the transcript as plain text, nothing else.`;
+
+            const transcriptionContents = [
+                {
+                    role: "user",
+                    parts: [
+                        {
+                            fileData: {
+                                fileUri: uploadedFile.uri,
+                                mimeType: uploadedFile.mimeType,
+                            }
+                        },
+                        { text: transcriptionPrompt }
+                    ]
+                }
+            ];
+
+            let transcriptionResponse;
+            let usedModel = "gemini-2.5-pro";
+            try {
+                console.log("Step 1: Transcribing audio with gemini-2.5-pro...");
+                transcriptionResponse = await callWithRetry("gemini-2.5-pro", transcriptionContents);
+            } catch (proError: any) {
+                console.warn(`gemini-2.5-pro failed (${proError?.status || proError?.message}). Falling back to gemini-2.5-flash...`);
+                usedModel = "gemini-2.5-flash";
+                transcriptionResponse = await callWithRetry("gemini-2.5-flash", transcriptionContents);
+            }
+
+            const rawTranscript = transcriptionResponse!.text;
+            console.log(`Step 1 complete (${usedModel}). Transcript length: ${rawTranscript?.length ?? 0} chars.`);
+
+            // ── Step 2: Summarization & Formatting ──
+            console.log(`Step 2: Summarizing transcript with gemini-2.5-pro in ${targetLanguage}...`);
+
+            const summarizationPrompt = `You are an expert note-taker.
+Below is a raw transcript of an audio recording. Based on this transcript, please provide:
+1. A brief summary of what the audio is about.
+2. The full transcript (if it's short) or key points/takeaways (if it's long).
+3. Action items or next steps if mentioned.
+IMPORTANT: Your entire response MUST be written fluently in ${targetLanguage}.
+Format your response beautifully in Markdown.
+
+--- RAW TRANSCRIPT ---
+${rawTranscript}`;
+
+            const summarizationContents = [
+                {
+                    role: "user",
+                    parts: [{ text: summarizationPrompt }]
+                }
+            ];
+
+            let summarizationResponse;
+            try {
+                summarizationResponse = await callWithRetry("gemini-2.5-pro", summarizationContents);
+            } catch (proError: any) {
+                console.warn(`gemini-2.5-pro failed for summarization. Falling back to gemini-2.5-flash...`);
+                summarizationResponse = await callWithRetry("gemini-2.5-flash", summarizationContents);
+            }
+
+            const notes = summarizationResponse!.text;
+            console.log("Step 2 complete. Notes generated.");
 
             // 4. Clean up the remote file on Gemini
             try {
@@ -103,7 +178,7 @@ export async function POST(req: NextRequest) {
                 console.error("Warning: Failed to delete remote Gemini file:", cleanupError);
             }
 
-            return NextResponse.json({ notes });
+            return NextResponse.json({ transcript: rawTranscript, notes });
 
         } catch (apiError: any) {
             console.error("Gemini API Error:", apiError);
