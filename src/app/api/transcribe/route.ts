@@ -26,7 +26,18 @@ export async function POST(req: NextRequest) {
         // 1. Write file to a temporary location for Gemini Upload
         const bytes = await audioFile.arrayBuffer();
         const buffer = Buffer.from(bytes);
-        tempFilePath = join(tmpdir(), `${crypto.randomUUID()}-${audioFile.name}`);
+
+        // Extract extension to keep the file type but prevent non-ASCII characters from crashing the upload
+        let extension = "tmp";
+        if (audioFile.name.includes('.')) {
+            const extStr = audioFile.name.split('.').pop();
+            // Ensure the extension only contains alphanumeric characters (ASCII)
+            if (extStr && /^[a-zA-Z0-9]+$/.test(extStr)) {
+                extension = extStr;
+            }
+        }
+        tempFilePath = join(tmpdir(), `${crypto.randomUUID()}.${extension}`);
+
         await writeFile(tempFilePath, buffer);
 
         try {
