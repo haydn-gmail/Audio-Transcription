@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { UploadCloud, FileAudio, Loader2, CheckCircle } from "lucide-react";
+import { UploadCloud, FileAudio, Loader2, CheckCircle, Copy, Check } from "lucide-react";
 import styles from "./Uploader.module.css";
 import ReactMarkdown from "react-markdown";
 
@@ -14,6 +14,7 @@ export default function Uploader() {
     const [error, setError] = useState<string | null>(null);
     const [language, setLanguage] = useState<string>("English");
     const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
+    const [copied, setCopied] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -88,6 +89,15 @@ export default function Uploader() {
         setResult(null);
         setError(null);
         setActiveTab("summary");
+        setCopied(false);
+    };
+
+    const handleCopy = async () => {
+        const text = activeTab === "summary" ? result : transcript;
+        if (!text) return;
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
     };
 
     return (
@@ -193,6 +203,11 @@ export default function Uploader() {
                             Full Transcript
                         </button>
                     </div>
+
+                    <button className={styles.copyBtn} onClick={handleCopy} title="Copy as Markdown">
+                        {copied ? <Check size={16} /> : <Copy size={16} />}
+                        {copied ? "Copied!" : "Copy Markdown"}
+                    </button>
 
                     <div className={`${styles.notesContainer} ${styles.markdown} glass-panel`}>
                         <ReactMarkdown>
