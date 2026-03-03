@@ -1,9 +1,17 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { UploadCloud, FileAudio, Loader2, CheckCircle, Copy, Check } from "lucide-react";
+import { UploadCloud, FileAudio, CheckCircle, Copy, Check } from "lucide-react";
 import styles from "./Uploader.module.css";
 import ReactMarkdown from "react-markdown";
+
+const STEPS = [
+    { id: 0, label: "Preparing" },
+    { id: 1, label: "Uploading" },
+    { id: 2, label: "Transcribing" },
+    { id: 3, label: "Summarizing" },
+    { id: 4, label: "Creating Digest" },
+];
 
 export default function Uploader() {
     const [file, setFile] = useState<File | null>(null);
@@ -16,8 +24,12 @@ export default function Uploader() {
     const [language, setLanguage] = useState<string>("English");
     const [activeTab, setActiveTab] = useState<"digest" | "summary" | "transcript">("digest");
     const [copied, setCopied] = useState(false);
+    const [currentStep, setCurrentStep] = useState(-1);
+    const [stepLabel, setStepLabel] = useState("");
+    const [elapsedTime, setElapsedTime] = useState(0);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -51,6 +63,26 @@ export default function Uploader() {
         }
     };
 
+    const startTimer = () => {
+        setElapsedTime(0);
+        timerRef.current = setInterval(() => {
+            setElapsedTime(prev => prev + 1);
+        }, 1000);
+    };
+
+    const stopTimer = () => {
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+        }
+    };
+
+    const formatTime = (seconds: number) => {
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    };
+
     const handleUpload = async () => {
         if (!file) return;
 
@@ -60,6 +92,9 @@ export default function Uploader() {
         setDigest(null);
         setTranscript(null);
         setActiveTab("digest");
+        setCurrentStep(0);
+        setStepLabel("Starting…");
+        startTimer();
 
         const formData = new FormData();
         formData.append("audio", file);
@@ -71,18 +106,57 @@ export default function Uploader() {
                 body: formData,
             });
 
-            if (!response.ok) {
+            if (!response.ok || !response.body) {
                 throw new Error("Transcription failed");
             }
 
-            const data = await response.json();
-            setTranscript(data.transcript);
-            setResult(data.notes);
-            setDigest(data.digest);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Parse SSE events from the buffer
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                        try {
+                            const event = JSON.parse(line.slice(6));
+
+                            if (event.type === "progress") {
+                                if (event.step >= 0) {
+                                    setCurrentStep(event.step);
+                                }
+                                setStepLabel(event.label);
+                            } else if (event.type === "complete") {
+                                setTranscript(event.transcript);
+                                setResult(event.notes);
+                                setDigest(event.digest);
+                                setCurrentStep(5); // All done
+                                setStepLabel("Complete!");
+                            } else if (event.type === "error") {
+                                throw new Error(event.error);
+                            }
+                        } catch (parseErr: any) {
+                            if (parseErr.message && parseErr.message !== "Unexpected end of JSON input") {
+                                throw parseErr;
+                            }
+                        }
+                    }
+                }
+            }
         } catch (err: any) {
             setError(err.message || "An error occurred during transcription.");
+            setCurrentStep(-1);
         } finally {
             setIsUploading(false);
+            stopTimer();
         }
     };
 
@@ -94,6 +168,9 @@ export default function Uploader() {
         setError(null);
         setActiveTab("digest");
         setCopied(false);
+        setCurrentStep(-1);
+        setStepLabel("");
+        setElapsedTime(0);
     };
 
     const handleCopy = async () => {
@@ -148,19 +225,57 @@ export default function Uploader() {
 
                     {error && <div className={styles.errorMsg}>{error}</div>}
 
+                    {/* ── Progress Stepper ── */}
+                    {isUploading && (
+                        <div className={`${styles.progressContainer} glass-panel`}>
+                            <div className={styles.progressHeader}>
+                                <span className={styles.progressTitle}>Processing your audio</span>
+                                <span className={styles.progressTimer}>{formatTime(elapsedTime)}</span>
+                            </div>
+
+                            <div className={styles.stepper}>
+                                {STEPS.map((step) => {
+                                    let state: "pending" | "active" | "done" = "pending";
+                                    if (currentStep > step.id) state = "done";
+                                    else if (currentStep === step.id) state = "active";
+
+                                    return (
+                                        <div
+                                            key={step.id}
+                                            className={`${styles.stepItem} ${styles[`step_${state}`]}`}
+                                        >
+                                            <div className={styles.stepIndicator}>
+                                                {state === "done" ? (
+                                                    <CheckCircle size={20} />
+                                                ) : state === "active" ? (
+                                                    <div className={styles.stepPulse} />
+                                                ) : (
+                                                    <div className={styles.stepDot} />
+                                                )}
+                                            </div>
+                                            <span className={styles.stepLabel}>{step.label}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className={styles.progressBar}>
+                                <div
+                                    className={styles.progressFill}
+                                    style={{ width: `${Math.min((currentStep / STEPS.length) * 100, 100)}%` }}
+                                />
+                            </div>
+
+                            <p className={styles.progressDetail}>{stepLabel}</p>
+                        </div>
+                    )}
+
                     <button
                         className={`${styles.submitBtn} ${!file || isUploading ? styles.disabled : ''}`}
                         onClick={handleUpload}
                         disabled={!file || isUploading}
                     >
-                        {isUploading ? (
-                            <>
-                                <Loader2 className={styles.spinner} size={20} />
-                                Processing (This may take a minute)...
-                            </>
-                        ) : (
-                            "Generate Notes"
-                        )}
+                        {isUploading ? "Processing…" : "Generate Notes"}
                     </button>
 
                     <div className={styles.languageWrapper}>

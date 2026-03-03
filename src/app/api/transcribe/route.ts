@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
@@ -16,111 +16,119 @@ function createAIClient() {
 export async function POST(req: NextRequest) {
     let tempFilePath: string | null = null;
 
-    try {
-        const formData = await req.formData();
-        const audioFile = formData.get("audio") as File;
-        const targetLanguage = (formData.get("language") as string) || "English";
+    // ── SSE helper ──
+    const encoder = new TextEncoder();
+    const stream = new TransformStream();
+    const writer = stream.writable.getWriter();
 
-        if (!audioFile) {
-            return NextResponse.json({ error: "No audio file provided" }, { status: 400 });
-        }
+    function sendEvent(type: string, data: any) {
+        const payload = JSON.stringify({ type, ...data });
+        writer.write(encoder.encode(`data: ${payload}\n\n`));
+    }
 
-        if (!process.env.GEMINI_API_KEY) {
-            return NextResponse.json({ error: "Server missing Gemini API Key" }, { status: 500 });
-        }
-
-        // 1. Write file to a temporary location for Gemini Upload
-        const bytes = await audioFile.arrayBuffer();
-        const buffer = Buffer.from(bytes);
-
-        // Extract extension to keep the file type but prevent non-ASCII characters from crashing the upload
-        let extension = "tmp";
-        if (audioFile.name.includes('.')) {
-            const extStr = audioFile.name.split('.').pop();
-            // Ensure the extension only contains alphanumeric characters (ASCII)
-            if (extStr && /^[a-zA-Z0-9]+$/.test(extStr)) {
-                extension = extStr;
-            }
-        }
-        tempFilePath = join(tmpdir(), `${crypto.randomUUID()}.${extension}`);
-
-        await writeFile(tempFilePath, buffer);
-
+    // Start processing in the background so we can return the stream immediately
+    (async () => {
         try {
-            // Create a fresh AI client for this request — no shared state
-            const ai = createAIClient();
+            const formData = await req.formData();
+            const audioFile = formData.get("audio") as File;
+            const targetLanguage = (formData.get("language") as string) || "English";
 
-            // ── Clean up any lingering files from previous sessions ──
+            if (!audioFile) {
+                sendEvent("error", { error: "No audio file provided" });
+                writer.close();
+                return;
+            }
+
+            if (!process.env.GEMINI_API_KEY) {
+                sendEvent("error", { error: "Server missing Gemini API Key" });
+                writer.close();
+                return;
+            }
+
+            // ── Step 0: Preparing ──
+            sendEvent("progress", { step: 0, label: "Preparing audio file…" });
+
+            const bytes = await audioFile.arrayBuffer();
+            const buffer = Buffer.from(bytes);
+
+            let extension = "tmp";
+            if (audioFile.name.includes('.')) {
+                const extStr = audioFile.name.split('.').pop();
+                if (extStr && /^[a-zA-Z0-9]+$/.test(extStr)) {
+                    extension = extStr;
+                }
+            }
+            tempFilePath = join(tmpdir(), `${crypto.randomUUID()}.${extension}`);
+            await writeFile(tempFilePath, buffer);
+
             try {
-                console.log("Cleaning up old Gemini files...");
-                const existingFiles = await ai.files.list();
-                for await (const f of existingFiles) {
-                    if (f.name) {
-                        try {
-                            await ai.files.delete({ name: f.name });
-                            console.log(`  Deleted old file: ${f.name}`);
-                        } catch { /* ignore individual deletion errors */ }
+                const ai = createAIClient();
+
+                // ── Clean up old files ──
+                try {
+                    const existingFiles = await ai.files.list();
+                    for await (const f of existingFiles) {
+                        if (f.name) {
+                            try { await ai.files.delete({ name: f.name }); } catch { /* ignore */ }
+                        }
                     }
+                } catch { /* ignore */ }
+
+                // ── Upload ──
+                sendEvent("progress", { step: 1, label: "Uploading to Gemini…" });
+
+                let mimeType = audioFile.type;
+                if (!mimeType) {
+                    const ext = audioFile.name.split('.').pop()?.toLowerCase();
+                    if (ext === 'm4a') mimeType = 'audio/mp4';
+                    else if (ext === 'mp3') mimeType = 'audio/mpeg';
+                    else if (ext === 'wav') mimeType = 'audio/wav';
+                    else if (ext === 'ogg') mimeType = 'audio/ogg';
+                    else mimeType = 'audio/x-m4a';
                 }
-            } catch (listError) {
-                console.warn("Warning: Could not list/clean old Gemini files:", listError);
-            }
 
-            // 2. Upload to Gemini File API
-            console.log("Uploading to Gemini API...");
+                const uploadedFile = await ai.files.upload({
+                    file: tempFilePath,
+                    config: { mimeType },
+                });
 
-            // Determine mime type, fallback to a sensible default if missing
-            let mimeType = audioFile.type;
-            if (!mimeType) {
-                const extension = audioFile.name.split('.').pop()?.toLowerCase();
-                if (extension === 'm4a') mimeType = 'audio/mp4';
-                else if (extension === 'mp3') mimeType = 'audio/mpeg';
-                else if (extension === 'wav') mimeType = 'audio/wav';
-                else if (extension === 'ogg') mimeType = 'audio/ogg';
-                else mimeType = 'audio/x-m4a'; // default fallback for Apple audio
-            }
-
-            const uploadedFile = await ai.files.upload({
-                file: tempFilePath,
-                config: {
-                    mimeType: mimeType,
-                }
-            });
-
-            console.log(`File uploaded successfully: ${uploadedFile.name}, requesting summary in ${targetLanguage}.`);
-
-            // ── Helper: call model with retry + exponential backoff ──
-            async function callWithRetry(
-                model: string,
-                contents: any[],
-                maxRetries = 3,
-                initialDelayMs = 2000
-            ) {
-                for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                    try {
-                        return await ai.models.generateContent({ model, contents });
-                    } catch (err: any) {
-                        const status = err?.status ?? err?.code;
-                        const errMsg = err?.message ?? '';
-                        const isRetryable =
-                            status === 503 ||
-                            status === 429 ||
-                            errMsg.includes('fetch failed') ||
-                            errMsg.includes('UND_ERR_HEADERS_TIMEOUT') ||
-                            errMsg.includes('ECONNRESET');
-                        if (isRetryable && attempt < maxRetries) {
-                            const delay = initialDelayMs * Math.pow(2, attempt - 1);
-                            console.warn(`Model ${model} returned ${status}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
-                            await new Promise(r => setTimeout(r, delay));
-                        } else {
-                            throw err;
+                // ── Helper: call model with retry + exponential backoff ──
+                async function callWithRetry(
+                    model: string,
+                    contents: any[],
+                    maxRetries = 3,
+                    initialDelayMs = 2000
+                ) {
+                    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                        try {
+                            return await ai.models.generateContent({ model, contents });
+                        } catch (err: any) {
+                            const status = err?.status ?? err?.code;
+                            const errMsg = err?.message ?? '';
+                            const isRetryable =
+                                status === 503 ||
+                                status === 429 ||
+                                errMsg.includes('fetch failed') ||
+                                errMsg.includes('UND_ERR_HEADERS_TIMEOUT') ||
+                                errMsg.includes('ECONNRESET');
+                            if (isRetryable && attempt < maxRetries) {
+                                const delay = initialDelayMs * Math.pow(2, attempt - 1);
+                                sendEvent("progress", {
+                                    step: -1,
+                                    label: `Retrying (attempt ${attempt + 1}/${maxRetries})…`,
+                                });
+                                await new Promise(r => setTimeout(r, delay));
+                            } else {
+                                throw err;
+                            }
                         }
                     }
                 }
-            }
 
-            // ── Step 1: Raw Transcription ──
-            const transcriptionPrompt = `You are a professional audio transcriber. Your ONLY job is to produce an accurate, verbatim transcript of the SINGLE audio file provided in this request.
+                // ── Step 2: Transcription ──
+                sendEvent("progress", { step: 2, label: "Transcribing audio…" });
+
+                const transcriptionPrompt = `You are a professional audio transcriber. Your ONLY job is to produce an accurate, verbatim transcript of the SINGLE audio file provided in this request.
 
 CRITICAL ISOLATION RULES:
 - You are processing ONE audio file and ONLY this audio file.
@@ -145,49 +153,42 @@ Speaker B: Response sentence. Another sentence.
 
 Speaker A: Next point. Continued discussion.`;
 
-            const transcriptionContents = [
-                {
-                    role: "user",
-                    parts: [
-                        {
-                            fileData: {
-                                fileUri: uploadedFile.uri,
-                                mimeType: uploadedFile.mimeType,
-                            }
-                        },
-                        { text: transcriptionPrompt }
-                    ]
+                const transcriptionContents = [
+                    {
+                        role: "user",
+                        parts: [
+                            {
+                                fileData: {
+                                    fileUri: uploadedFile.uri,
+                                    mimeType: uploadedFile.mimeType,
+                                }
+                            },
+                            { text: transcriptionPrompt }
+                        ]
+                    }
+                ];
+
+                let transcriptionResponse;
+                let usedModel = "gemini-2.5-pro";
+                try {
+                    transcriptionResponse = await callWithRetry("gemini-2.5-pro", transcriptionContents);
+                } catch (proError: any) {
+                    usedModel = "gemini-2.5-flash";
+                    transcriptionResponse = await callWithRetry("gemini-2.5-flash", transcriptionContents);
                 }
-            ];
 
-            let transcriptionResponse;
-            let usedModel = "gemini-2.5-pro";
-            try {
-                console.log("Step 1: Transcribing audio with gemini-2.5-pro...");
-                transcriptionResponse = await callWithRetry("gemini-2.5-pro", transcriptionContents);
-            } catch (proError: any) {
-                console.warn(`gemini-2.5-pro failed (${proError?.status || proError?.message}). Falling back to gemini-2.5-flash...`);
-                usedModel = "gemini-2.5-flash";
-                transcriptionResponse = await callWithRetry("gemini-2.5-flash", transcriptionContents);
-            }
+                const rawTranscript = transcriptionResponse!.text;
+                console.log(`Step 1 complete (${usedModel}). Transcript length: ${rawTranscript?.length ?? 0} chars.`);
 
-            const rawTranscript = transcriptionResponse!.text;
-            console.log(`Step 1 complete (${usedModel}). Transcript length: ${rawTranscript?.length ?? 0} chars.`);
+                // Delete uploaded file immediately
+                try {
+                    if (uploadedFile.name) await ai.files.delete({ name: uploadedFile.name });
+                } catch { /* ignore */ }
 
-            // ── Delete the uploaded file immediately — steps 2 & 3 only need text ──
-            try {
-                if (uploadedFile.name) {
-                    console.log("Deleting uploaded file after transcription...");
-                    await ai.files.delete({ name: uploadedFile.name });
-                }
-            } catch (earlyCleanupError) {
-                console.warn("Warning: Failed to delete file after step 1:", earlyCleanupError);
-            }
+                // ── Step 3: Summarization ──
+                sendEvent("progress", { step: 3, label: "Generating summary notes…" });
 
-            // ── Step 2: Summarization & Formatting ──
-            console.log(`Step 2: Summarizing transcript with gemini-2.5-pro in ${targetLanguage}...`);
-
-            const summarizationPrompt = `You are an expert note-taker and meeting summarizer.
+                const summarizationPrompt = `You are an expert note-taker and meeting summarizer.
 Below is a raw transcript of an audio recording. Based EXCLUSIVELY on this transcript, please provide a well-structured, easy-to-read summary in Markdown.
 
 CRITICAL ISOLATION RULES:
@@ -224,28 +225,24 @@ IMPORTANT: Your entire response MUST be written fluently in ${targetLanguage}.
 ${rawTranscript}
 --- END OF TRANSCRIPT ---`;
 
-            const summarizationContents = [
-                {
-                    role: "user",
-                    parts: [{ text: summarizationPrompt }]
+                let summarizationResponse;
+                try {
+                    summarizationResponse = await callWithRetry("gemini-2.5-pro", [
+                        { role: "user", parts: [{ text: summarizationPrompt }] }
+                    ]);
+                } catch {
+                    summarizationResponse = await callWithRetry("gemini-2.5-flash", [
+                        { role: "user", parts: [{ text: summarizationPrompt }] }
+                    ]);
                 }
-            ];
 
-            let summarizationResponse;
-            try {
-                summarizationResponse = await callWithRetry("gemini-2.5-pro", summarizationContents);
-            } catch (proError: any) {
-                console.warn(`gemini-2.5-pro failed for summarization. Falling back to gemini-2.5-flash...`);
-                summarizationResponse = await callWithRetry("gemini-2.5-flash", summarizationContents);
-            }
+                const notes = summarizationResponse!.text;
+                console.log("Step 2 complete. Notes generated.");
 
-            const notes = summarizationResponse!.text;
-            console.log("Step 2 complete. Notes generated.");
+                // ── Step 4: Digest ──
+                sendEvent("progress", { step: 4, label: "Creating digest…" });
 
-            // ── Step 3: Digest — Distill into Study Notes ──
-            console.log(`Step 3: Digesting with gemini-3-pro in ${targetLanguage}...`);
-
-            const digestPrompt = `You are a world-class analyst and study-note creator.
+                const digestPrompt = `You are a world-class analyst and study-note creator.
 Below is a structured summary of a discussion or audio recording. Your task is to distill it into a concise, high-value study note that a reader can use to quickly grasp the essence of the entire discussion.
 
 CRITICAL ISOLATION RULES:
@@ -291,48 +288,49 @@ IMPORTANT:
 ${notes}
 --- END OF SUMMARY ---`;
 
-            const digestContents = [
-                {
-                    role: "user",
-                    parts: [{ text: digestPrompt }]
-                }
-            ];
-
-            let digestResponse;
-            try {
-                digestResponse = await callWithRetry("gemini-3-pro", digestContents);
-            } catch (proError: any) {
-                console.warn(`gemini-3-pro failed for digest (${proError?.status || proError?.message}). Falling back to gemini-2.5-pro...`);
+                let digestResponse;
                 try {
-                    digestResponse = await callWithRetry("gemini-2.5-pro", digestContents);
-                } catch (fallbackError: any) {
-                    console.warn(`gemini-2.5-pro also failed for digest. Falling back to gemini-2.5-flash...`);
-                    digestResponse = await callWithRetry("gemini-2.5-flash", digestContents);
+                    digestResponse = await callWithRetry("gemini-3-pro", [
+                        { role: "user", parts: [{ text: digestPrompt }] }
+                    ]);
+                } catch {
+                    try {
+                        digestResponse = await callWithRetry("gemini-2.5-pro", [
+                            { role: "user", parts: [{ text: digestPrompt }] }
+                        ]);
+                    } catch {
+                        digestResponse = await callWithRetry("gemini-2.5-flash", [
+                            { role: "user", parts: [{ text: digestPrompt }] }
+                        ]);
+                    }
                 }
+
+                const digest = digestResponse!.text;
+                console.log("Step 3 complete. Digest generated.");
+
+                // ── Done ──
+                sendEvent("complete", { transcript: rawTranscript, notes, digest });
+
+            } catch (apiError: any) {
+                console.error("Gemini API Error:", apiError);
+                sendEvent("error", { error: apiError.message || "Failed to process audio with Gemini" });
             }
-
-            const digest = digestResponse!.text;
-            console.log("Step 3 complete. Digest generated.");
-
-            // File was already deleted after step 1 — no cleanup needed here
-
-            return NextResponse.json({ transcript: rawTranscript, notes, digest });
-
-        } catch (apiError: any) {
-            console.error("Gemini API Error:", apiError);
-            return NextResponse.json({ error: apiError.message || "Failed to process audio with Gemini" }, { status: 500 });
-        }
-    } catch (error: any) {
-        console.error("Transcription error:", error);
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 });
-    } finally {
-        // 5. Clean up local temporary file
-        if (tempFilePath) {
-            try {
-                await unlink(tempFilePath);
-            } catch (e) {
-                // ignore local unlink errors
+        } catch (error: any) {
+            console.error("Transcription error:", error);
+            sendEvent("error", { error: "Internal server error" });
+        } finally {
+            if (tempFilePath) {
+                try { await unlink(tempFilePath); } catch { /* ignore */ }
             }
+            writer.close();
         }
-    }
+    })();
+
+    return new Response(stream.readable, {
+        headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+        },
+    });
 }
