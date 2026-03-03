@@ -11,9 +11,10 @@ export default function Uploader() {
     const [isUploading, setIsUploading] = useState(false);
     const [transcript, setTranscript] = useState<string | null>(null);
     const [result, setResult] = useState<string | null>(null);
+    const [digest, setDigest] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [language, setLanguage] = useState<string>("English");
-    const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
+    const [activeTab, setActiveTab] = useState<"digest" | "summary" | "transcript">("digest");
     const [copied, setCopied] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -56,8 +57,9 @@ export default function Uploader() {
         setIsUploading(true);
         setError(null);
         setResult(null);
+        setDigest(null);
         setTranscript(null);
-        setActiveTab("summary");
+        setActiveTab("digest");
 
         const formData = new FormData();
         formData.append("audio", file);
@@ -76,6 +78,7 @@ export default function Uploader() {
             const data = await response.json();
             setTranscript(data.transcript);
             setResult(data.notes);
+            setDigest(data.digest);
         } catch (err: any) {
             setError(err.message || "An error occurred during transcription.");
         } finally {
@@ -87,13 +90,14 @@ export default function Uploader() {
         setFile(null);
         setTranscript(null);
         setResult(null);
+        setDigest(null);
         setError(null);
-        setActiveTab("summary");
+        setActiveTab("digest");
         setCopied(false);
     };
 
     const handleCopy = async () => {
-        const text = activeTab === "summary" ? result : transcript;
+        const text = activeTab === "digest" ? digest : activeTab === "summary" ? result : transcript;
         if (!text) return;
         await navigator.clipboard.writeText(text);
         setCopied(true);
@@ -191,6 +195,12 @@ export default function Uploader() {
 
                     <div className={styles.tabBar}>
                         <button
+                            className={`${styles.tabBtn} ${activeTab === "digest" ? styles.tabActive : ""}`}
+                            onClick={() => setActiveTab("digest")}
+                        >
+                            Digest
+                        </button>
+                        <button
                             className={`${styles.tabBtn} ${activeTab === "summary" ? styles.tabActive : ""}`}
                             onClick={() => setActiveTab("summary")}
                         >
@@ -211,7 +221,7 @@ export default function Uploader() {
 
                     <div className={`${styles.notesContainer} ${styles.markdown} glass-panel`}>
                         <ReactMarkdown>
-                            {activeTab === "summary" ? result : transcript}
+                            {activeTab === "digest" ? digest : activeTab === "summary" ? result : transcript}
                         </ReactMarkdown>
                     </div>
                 </div>
