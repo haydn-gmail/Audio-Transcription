@@ -1,5 +1,6 @@
 import styles from "./page.module.css";
 import Uploader from "../components/Uploader";
+import Footer from "../components/Footer";
 
 export default function Home() {
   return (
@@ -16,9 +17,8 @@ export default function Home() {
         <Uploader />
       </main>
 
-      <footer className={styles.footer}>
-        <p>Powered by Next.js and Google Gemini API</p>
-      </footer>
+      <Footer />
     </div>
   );
 }
+
